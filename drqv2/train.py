@@ -2,12 +2,17 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
+
+import os
+os.environ['MUJOCO_GL'] = 'glfw'
+
+
 import warnings
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 
 import os
 os.environ['MKL_SERVICE_FORCE_INTEL'] = '1'
-os.environ['MUJOCO_GL'] = 'egl'
+#os.environ['MUJOCO_GL'] = 'egl'
 
 from pathlib import Path
 
@@ -25,10 +30,42 @@ from video import TrainVideoRecorder, VideoRecorder
 torch.backends.cudnn.benchmark = True
 
 
+
 def make_agent(obs_spec, action_spec, cfg):
-    cfg.obs_shape = obs_spec.shape
+    from omegaconf import OmegaConf, DictConfig, errors
+    
+    # 1. Calculate correct shape (9, 84, 84)
+    _shape = obs_spec['image'].shape
+    target_shape = (_shape[2], _shape[0], _shape[1])
+    
+    # 2. CRITICAL FIX: Set action_shape FIRST so it isn't "Missing" during the search
     cfg.action_shape = action_spec.shape
+    
+    print(f"\nDEBUG: Enforcing shape {target_shape} recursively...")
+
+    # 3. Recursive function with Safety Checks
+    def recursive_update(conf):
+        if isinstance(conf, (dict, DictConfig)):
+            for key in conf.keys():
+                # Skip action_shape since we already set it
+                if key == 'action_shape':
+                    continue
+                
+                if key == 'obs_shape':
+                    conf[key] = target_shape
+                    print(f"DEBUG: Updated {key} to {target_shape}")
+                else:
+                    # SAFETY: If we hit a missing value (???), just skip it
+                    try:
+                        recursive_update(conf[key])
+                    except (errors.MissingMandatoryValue, TypeError):
+                        pass 
+    
+    recursive_update(cfg)
+    
     return hydra.utils.instantiate(cfg)
+
+
 
 
 class Workspace:
@@ -56,8 +93,11 @@ class Workspace:
                                   self.cfg.action_repeat, self.cfg.seed)
         self.eval_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
                                  self.cfg.action_repeat, self.cfg.seed)
+    
+        
         # create replay buffer
-        data_specs = (self.train_env.observation_spec(),
+        # We extract ['pixels'] so we pass a Spec Object, not a Dict
+        data_specs = (self.train_env.observation_spec()['image'], 
                       self.train_env.action_spec(),
                       specs.Array((1,), np.float32, 'reward'),
                       specs.Array((1,), np.float32, 'discount'))
@@ -66,9 +106,14 @@ class Workspace:
                                                   self.work_dir / 'buffer')
 
         self.replay_loader = make_replay_loader(
-            self.work_dir / 'buffer', self.cfg.replay_buffer_size,
-            self.cfg.batch_size, self.cfg.replay_buffer_num_workers,
-            self.cfg.save_snapshot, self.cfg.nstep, self.cfg.discount)
+            data_specs,
+            self.work_dir / 'buffer', 
+            self.cfg.replay_buffer_size,
+            self.cfg.batch_size, 
+            self.cfg.replay_buffer_num_workers,
+            self.cfg.save_snapshot, 
+            self.cfg.nstep, 
+            self.cfg.task.discount)
         self._replay_iter = None
 
         self.video_recorder = VideoRecorder(

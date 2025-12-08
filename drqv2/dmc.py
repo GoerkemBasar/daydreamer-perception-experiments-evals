@@ -2,6 +2,8 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
+
+import custom_dmc
 from collections import deque
 from typing import Any, NamedTuple
 
@@ -76,19 +78,22 @@ class FrameStackWrapper(dm_env.Environment):
         assert pixels_key in wrapped_obs_spec
 
         pixels_shape = wrapped_obs_spec[pixels_key].shape
-        # remove batch dim
+        # remove batch dim if present
         if len(pixels_shape) == 4:
             pixels_shape = pixels_shape[1:]
+        
+        # FIX: Output name is 'image', but input key was 'pixels'
         self._obs_spec = specs.BoundedArray(shape=np.concatenate(
-            [[pixels_shape[2] * num_frames], pixels_shape[:2]], axis=0),
+            [pixels_shape[:2], [pixels_shape[2] * num_frames]], axis=0),
                                             dtype=np.uint8,
                                             minimum=0,
                                             maximum=255,
-                                            name='observation')
+                                            name='image')
 
     def _transform_observation(self, time_step):
         assert len(self._frames) == self._num_frames
-        obs = np.concatenate(list(self._frames), axis=0)
+        # Concatenate along the last dimension (Channels) to keep (H, W, C)
+        obs = np.concatenate(list(self._frames), axis=2)
         return time_step._replace(observation=obs)
 
     def _extract_pixels(self, time_step):
@@ -96,7 +101,7 @@ class FrameStackWrapper(dm_env.Environment):
         # remove batch dim
         if len(pixels.shape) == 4:
             pixels = pixels[0]
-        return pixels.transpose(2, 0, 1).copy()
+        return pixels.copy()
 
     def reset(self):
         time_step = self._env.reset()
@@ -180,34 +185,67 @@ class ExtendedTimeStepWrapper(dm_env.Environment):
         return getattr(self._env, name)
 
 
+class ObservationDictWrapper(dm_env.Environment):
+    def __init__(self, env):
+        self._env = env
+        # The env now outputs a flat array named 'image', we wrap it in a dict
+        self._obs_spec = {'image': env.observation_spec()}
+
+    def reset(self):
+        time_step = self._env.reset()
+        return time_step._replace(observation={'image': time_step.observation})
+
+    def step(self, action):
+        time_step = self._env.step(action)
+        return time_step._replace(observation={'image': time_step.observation})
+
+    def observation_spec(self):
+        return self._obs_spec
+
+    def action_spec(self):
+        return self._env.action_spec()
+    
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+
+
 def make(name, frame_stack, action_repeat, seed):
-    domain, task = name.split('_', 1)
-    # overwrite cup to ball_in_cup
-    domain = dict(cup='ball_in_cup').get(domain, domain)
-    # make sure reward is not visualized
-    if (domain, task) in suite.ALL_TASKS:
-        env = suite.load(domain,
-                         task,
-                         task_kwargs={'random': seed},
-                         visualize_reward=False)
-        pixels_key = 'pixels'
+    # 1. CUSTOM: Intercept your Walker experiment
+    if name.startswith('custom_walker'):
+        view_mode = name.split('_')[-1] 
+
+        env = custom_dmc.make_custom_walker(view=view_mode, seed=seed)
+        env.domain_name = 'walker'
+        env.task_name = view_mode
+
+        env = ActionRepeatWrapper(env, action_repeat)
+        env = action_scale.Wrapper(env, minimum=-1.0, maximum=+1.0)
+        
+        # Select camera ID based on the task name
+        cam_id = 'custom_side' if view_mode == 'side' else 'custom_top'
+        # This outputs a dict with key 'pixels'
+        env = pixels.Wrapper(env, pixels_only=True, 
+                             render_kwargs={'width': 84, 'height': 84, 'camera_id': cam_id})
+
+    # 2. STANDARD: Fallback for normal DMC tasks
     else:
-        name = f'{domain}_{task}_vision'
-        env = manipulation.load(name, seed=seed)
-        pixels_key = 'front_close'
-    # add wrappers
-    env = ActionDTypeWrapper(env, np.float32)
-    env = ActionRepeatWrapper(env, action_repeat)
-    env = action_scale.Wrapper(env, minimum=-1.0, maximum=+1.0)
-    # add renderings for clasical tasks
-    if (domain, task) in suite.ALL_TASKS:
-        # zoom in camera for quadruped
-        camera_id = dict(quadruped=2).get(domain, 0)
-        render_kwargs = dict(height=84, width=84, camera_id=camera_id)
-        env = pixels.Wrapper(env,
-                             pixels_only=True,
-                             render_kwargs=render_kwargs)
-    # stack several frames
-    env = FrameStackWrapper(env, frame_stack, pixels_key)
+        domain, task = name.split('_', 1)
+        if domain == 'cup': domain = 'ball_in_cup'
+
+        env = suite.load(domain, task, task_kwargs={'random': seed}, visualize_reward=False)
+
+        env = ActionDTypeWrapper(env, np.float32)
+        env = ActionRepeatWrapper(env, action_repeat)
+        env = action_scale.Wrapper(env, minimum=-1.0, maximum=+1.0)
+
+        # This outputs a dict with key 'pixels'
+        env = pixels.Wrapper(env, pixels_only=True, render_kwargs={'width': 84, 'height': 84, 'camera_id': 0})
+        env = ExtendedTimeStepWrapper(env)
+
+    # 3. GLOBAL WRAPPERS
+    # We pass pixels_key='pixels' because that is what pixels.Wrapper provides
+    env = FrameStackWrapper(env, frame_stack, pixels_key='pixels')
     env = ExtendedTimeStepWrapper(env)
+    env = ObservationDictWrapper(env) 
+    
     return env

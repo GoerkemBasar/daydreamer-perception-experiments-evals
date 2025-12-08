@@ -1,0 +1,4 @@
+- +task=custom_walker_side
+- seed=1
+- task.discount=0.99
+- device=cpu

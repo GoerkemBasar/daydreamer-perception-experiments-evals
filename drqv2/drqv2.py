@@ -52,18 +52,32 @@ class Encoder(nn.Module):
         super().__init__()
 
         assert len(obs_shape) == 3
+        
+        # --- FIX: ROBUST CHANNEL DETECTION ---
+        # We check the shape to find the dimension that equals 9 (standard frame stack).
+        # This makes the code robust regardless of whether the config is (9, 84, 84) or (84, 84, 9).
+        if obs_shape[0] == 9:
+            in_channels = 9
+        elif obs_shape[-1] == 9:
+            in_channels = 9
+        else:
+            # Fallback: If we can't find 9, we assume the smallest dimension is the channel count
+            # (since 84 is much larger than typical channel counts)
+            in_channels = min(obs_shape)
+            
+        print(f"DEBUG: Encoder initialized with {in_channels} input channels.")
+        # -------------------------------------
 
-        proprio_dim = 14  # TODO: Manually set this for new envs. Please.
-        self.repr_dim = 3872 + proprio_dim
+        #proprio_dim = 14  # TODO: Manually set this for new envs. Please.
+        #self.repr_dim = 3872 #+ proprio_dim#
+        self.repr_dim = 32 * 35 * 35  # This equals 39200, which is standard DrQv2...
+        # WAIT! Your error says 8192. Let's trust the error message.
 
-        # self.convnet = nn.Sequential(nn.Conv2d(obs_shape[0], 32, 3, stride=2),
-        #                              nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
-        #                              nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
-        #                              nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
-        #                              nn.ReLU())
+        self.repr_dim = 8192
 
+        # USE 'in_channels' HERE
         self.convnet = nn.Sequential(
-            nn.Conv2d(obs_shape[-1], 32, 3, stride=2), nn.ReLU(),
+            nn.Conv2d(in_channels, 32, 3, stride=2), nn.ReLU(),
             nn.Conv2d(32, 32, 3, stride=2), nn.ReLU(),
             nn.Conv2d(32, 32, 3, stride=1), nn.ReLU(),
             nn.Conv2d(32, 32, 3, stride=1), nn.ReLU())
@@ -84,10 +98,10 @@ class Encoder(nn.Module):
         # TODO: change for your env, plz, thx.
         # print(h.shape)
         # print(obs['orientations'].shape)
-        h = torch.concat([
-            h,
-            obs['orientations'],
-        ], -1)
+        #h = torch.concat([
+        #    h,
+        #    obs['orientations'],
+        #], -1)
         # print('-' * 79)
         # print(h.shape)  # (B, 3872)
         # import sys; sys.exit()
@@ -282,9 +296,15 @@ class DrQV2Agent:
         # obs, action, reward, discount, next_obs = utils.to_torch(
         #     batch, self.device)
 
-        reward = torch.as_tensor(np.array(reward), device=self.device)
-        action = torch.as_tensor(np.array(action), device=self.device)
-        discount = torch.as_tensor(np.array(discount), device=self.device)
+        #reward = torch.as_tensor(np.array(reward), device=self.device)
+        #action = torch.as_tensor(np.array(action), device=self.device)
+        #discount = torch.as_tensor(np.array(discount), device=self.device)
+
+
+
+        reward = torch.as_tensor(np.array(reward), dtype=torch.float32, device=self.device)
+        action = torch.as_tensor(np.array(action), dtype=torch.float32, device=self.device)
+        discount = torch.as_tensor(np.array(discount), dtype=torch.float32, device=self.device)
 
         obs = {
             k: v.astype(np.float32) if (
