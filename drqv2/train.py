@@ -104,6 +104,9 @@ class Workspace:
 
         self.replay_storage = ReplayBufferStorage(data_specs,
                                                   self.work_dir / 'buffer')
+        
+
+        # ... (lines 66-95 remain the same: logger, envs, replay buffer) ...
 
         self.replay_loader = make_replay_loader(
             data_specs,
@@ -116,10 +119,30 @@ class Workspace:
             self.cfg.task.discount)
         self._replay_iter = None
 
+        # --- FIX START: FORCE VIDEO RECORDER TO USE CUSTOM CAMERA ---
+        vid_cam_id = 0  # Default to 0 for standard tasks
+        
+        # Check if we are running a custom task and switch the camera accordingly
+        if 'custom_walker' in self.cfg.task_name:
+            if 'top' in self.cfg.task_name:
+                vid_cam_id = 'custom_top'
+            elif 'side' in self.cfg.task_name:
+                vid_cam_id = 'custom_side'
+        
+        print(f"DEBUG: Video Recorder set to use Camera: {vid_cam_id}")
+
         self.video_recorder = VideoRecorder(
-            self.work_dir if self.cfg.save_video else None)
+            self.work_dir if self.cfg.save_video else None,
+            camera_id=vid_cam_id)  # <--- PASS THE ID HERE
+            
         self.train_video_recorder = TrainVideoRecorder(
-            self.work_dir if self.cfg.save_train_video else None)
+            self.work_dir if self.cfg.save_train_video else None,
+            camera_id=vid_cam_id)  # <--- PASS THE ID HERE
+        
+        
+
+
+
 
 
     @property
@@ -166,12 +189,13 @@ class Workspace:
             log('episode', self.global_episode)
             log('step', self.global_step)
 
+
     def train(self):
         # predicates
         train_until_step = utils.Until(self.cfg.num_train_frames,
                                        self.cfg.action_repeat)
-        seed_until_step = utils.Until(self.cfg.num_seed_frames,
-                                      self.cfg.action_repeat)
+        # We ignore the config for seeding to prevent crashes
+        # seed_until_step = utils.Until(self.cfg.num_seed_frames, self.cfg.action_repeat)
         eval_every_step = utils.Every(self.cfg.eval_every_frames,
                                       self.cfg.action_repeat)
 
@@ -221,8 +245,25 @@ class Workspace:
                                         self.global_step,
                                         eval_mode=False)
 
-            # try to update the agent
-            if not seed_until_step(self.global_step):
+            # --- HARDCODED FIX: Force wait for 4000 steps ---
+            warmup_steps = 4000 // self.cfg.action_repeat
+            if self.global_step >= warmup_steps:
+                
+                # [NEW] Force re-load of the iterator if it's the first update
+                # This ensures the loader sees the files created during warmup
+                if self.global_step == warmup_steps:
+                     print("DEBUG: Re-creating Replay Loader to catch up with files...")
+                     self.replay_loader = make_replay_loader(
+                        self.replay_storage._data_specs, # Or self.data_specs if you saved it
+                        self.work_dir / 'buffer',
+                        self.cfg.replay_buffer_size,
+                        self.cfg.batch_size,
+                        self.cfg.replay_buffer_num_workers,
+                        self.cfg.save_snapshot,
+                        self.cfg.nstep,
+                        self.cfg.task.discount)
+                     self._replay_iter = iter(self.replay_loader)
+
                 metrics = self.agent.update(self.replay_iter, self.global_step)
                 self.logger.log_metrics(metrics, self.global_frame, ty='train')
 
@@ -234,19 +275,6 @@ class Workspace:
             episode_step += 1
             self._global_step += 1
 
-    def save_snapshot(self):
-        snapshot = self.work_dir / 'snapshot.pt'
-        keys_to_save = ['agent', 'timer', '_global_step', '_global_episode']
-        payload = {k: self.__dict__[k] for k in keys_to_save}
-        with snapshot.open('wb') as f:
-            torch.save(payload, f)
-
-    def load_snapshot(self):
-        snapshot = self.work_dir / 'snapshot.pt'
-        with snapshot.open('rb') as f:
-            payload = torch.load(f)
-        for k, v in payload.items():
-            self.__dict__[k] = v
 
 
 @hydra.main(config_path='cfgs', config_name='config')

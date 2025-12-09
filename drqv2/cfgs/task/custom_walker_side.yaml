@@ -1,4 +1,3 @@
-# cfgs/task/custom_walker_side.yaml
 name: custom_walker_side
 action_repeat: 2
 discount: 0.99

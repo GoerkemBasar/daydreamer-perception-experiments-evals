@@ -1,0 +1,6 @@
+- +task=walker_walk
+- task_name=custom_walker_side
+- seed=1
+- +task.discount=0.99
+- device=mps
+- replay_buffer_num_workers=0
