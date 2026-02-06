@@ -119,16 +119,44 @@ class Module(snt.Module):
     print(f'Saving module with {len(values)} tensors and {count} parameters.')
     return values
 
-  def load(self, values):
+  def load(self, values, strict=True):
     existing = {x.name: x for x in self.variables}
     provided = values.copy()
     count = int(sum(np.prod(x.shape) for x in provided.values()))
     print(f'Loading module with {len(values)} tensors and {count} parameters.')
-    existing = [x[1] for x in sorted(existing.items(), key=lambda x: x[0])]
-    provided = [x[1] for x in sorted(provided.items(), key=lambda x: x[0])]
-    assert len(provided) == len(existing), (len(provided) == len(existing))
-    for src, dst in zip(provided, existing):
+    if strict:
+      missing = sorted(set(provided) - set(existing))
+      extra = sorted(set(existing) - set(provided))
+      if missing or extra:
+        raise AssertionError(
+            f'Checkpoint mismatch: missing={len(missing)} extra={len(extra)}')
+      for name in sorted(existing):
+        src = provided[name]
+        dst = existing[name]
+        if tuple(src.shape) != tuple(dst.shape):
+          raise ValueError(
+              f"Shape mismatch for '{name}': {src.shape} vs {dst.shape}")
+        dst.assign(src)
+      return
+
+    loaded = 0
+    skipped_missing = 0
+    skipped_shape = 0
+    for name, src in sorted(provided.items()):
+      dst = existing.get(name, None)
+      if dst is None:
+        skipped_missing += 1
+        continue
+      if tuple(src.shape) != tuple(dst.shape):
+        skipped_shape += 1
+        continue
       dst.assign(src)
+      loaded += 1
+    if loaded == 0:
+      raise AssertionError('Non-strict load could not match any tensors.')
+    print(
+        f'Non-strict load restored {loaded} tensors; skipped '
+        f'{skipped_missing} missing and {skipped_shape} shape-mismatched.')
 
   def get(self, name, ctor, *args, **kwargs):
     if name not in self._modules:

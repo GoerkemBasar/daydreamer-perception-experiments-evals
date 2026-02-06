@@ -16,6 +16,13 @@ defaults:
   eval_dir: ''
   filter: '.*'
   tbtt: 0
+  
+  eval:
+    eps: 10
+    fill: 0
+    samples: 1
+    log_keys_video: [image]
+
   train:
     steps: 1e10
     expl_until: 0

@@ -85,8 +85,8 @@ class TFAgent(embodied.Agent):
   def save(self):
     return self.agent.save()
 
-  def load(self, values):
-    self.agent.load(values)
+  def load(self, values, strict=True):
+    self.agent.load(values, strict=strict)
 
   @contextlib.contextmanager
   def _strategy_scope(self):
@@ -151,6 +151,9 @@ class TFAgent(embodied.Agent):
           gpus[0], [conf] * self.config.logical_gpus)
 
     if self.config.platform == 'cpu':
+      # Fully disable GPU placement in CPU mode.
+      if gpus:
+        tf.config.set_visible_devices([], 'GPU')
       return None
 
     elif self.config.platform == 'gpu':

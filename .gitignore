@@ -1,8 +1,39 @@
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*.un~
+
+# Python
 __pycache__/
 *.py[cod]
-*.egg-info
-dist
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+ENV/
+
+# Runtime logs
 MUJOCO_LOG.TXT
-*.un~
-exp
-.DS_Store
+events.out.tfevents.*
+*.log
+
+# Experiment outputs
+exp/
+drqv2/exp_local/
+logdir/
+cross_eval_videos/
+daydreamer_eval_videos/
+daydreamer_side_1M_videos/
+daydreamer_top_1M_videos/
