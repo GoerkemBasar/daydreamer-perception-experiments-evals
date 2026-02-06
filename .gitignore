@@ -32,8 +32,16 @@ events.out.tfevents.*
 # Experiment outputs
 exp/
 drqv2/exp_local/
-logdir/
 cross_eval_videos/
 daydreamer_eval_videos/
+daydreamer_side_1m_videos/
 daydreamer_side_1M_videos/
 daydreamer_top_1M_videos/
+
+# Keep only selected artifacts from logdir.
+logdir/*
+!logdir/*/
+logdir/*/*
+!logdir/*/metrics.jsonl
+!logdir/*/scores.jsonl
+!logdir/*/checkpoint.pkl
