@@ -59,7 +59,25 @@ Notes:
   preference for this environment.
 - You still need to `conda activate dreamer` before running commands.
 
-## 2. Training Commands (Used Setup)
+## 2. Where To Find Checkpoints and Metrics
+
+Main run folders:
+
+- `logdir/run_gruenau_server_side_01` (side-view model)
+- `logdir/run_gruenau_server_top_01` (top-view model)
+
+Each run folder contains:
+
+- `checkpoint.pkl`: model weights/state for continuing training or evaluation.
+- `metrics.jsonl`: full training/eval metric stream (step-wise JSON lines).
+- `scores.jsonl`: episode returns/scores.
+- `eval_episodes/*.npz`: standard eval rollouts.
+- `cross_eval_*/*.npz`: cross-world eval rollouts.
+
+For your own evaluations or retraining, always point `--logdir` to the run
+folder that contains the `checkpoint.pkl` you want to use.
+
+## 3. Training Commands (Used Setup)
 
 These flags must match at eval time (especially precision and cnn keys).
 
@@ -109,7 +127,7 @@ python -u embodied/agents/dreamerv2plus/train.py \
   --train.log_every 100
 ```
 
-## 3. Standard Evaluation (Same World)
+## 4. Standard Evaluation (Same World)
 
 ### Side brain in side world
 
@@ -149,7 +167,7 @@ python -u embodied/agents/dreamerv2plus/train.py \
   --decoder.cnn_keys '^image$'
 ```
 
-## 4. Cross-Evaluation ("Blindfold Test")
+## 5. Cross-Evaluation ("Blindfold Test")
 
 Use separate `eval_dir` folders to keep cross results isolated.
 
@@ -191,7 +209,7 @@ python -u embodied/agents/dreamerv2plus/train.py \
   --decoder.cnn_keys '^image$'
 ```
 
-## 5. Check That Eval Episodes Were Saved
+## 6. Check That Eval Episodes Were Saved
 
 ```bash
 find logdir/run_gruenau_server_side_01/eval_episodes -maxdepth 1 -name '*.npz' | wc -l
@@ -200,7 +218,7 @@ find logdir/run_gruenau_server_top_01/cross_eval_side_world_episodes -maxdepth 1
 find logdir/run_gruenau_server_side_01/cross_eval_top_world_episodes -maxdepth 1 -name '*.npz' | wc -l
 ```
 
-## 6. Convert `.npz` Episodes to Video (`.mp4`)
+## 7. Convert `.npz` Episodes to Video (`.mp4`)
 
 ### Convert the latest episode in a folder
 
