@@ -1,0 +1,3 @@
+camera_name,task,mode,target,pos,x_axis_from_xyaxes,y_axis_from_xyaxes,z_axis_cross_x_y,forward_view_dir_-z,unit_vector_to_torso,forward_dot_to_target
+Side Camera,dmc_custom_walker_side,trackcom,torso,"[0.0000, -3.0000, 1.0000]","[1.0000, 0.0000, 0.0000]","[0.0000, 0.0000, 1.0000]","[0.0000, -1.0000, 0.0000]","[-0.0000, 1.0000, -0.0000]","[0.0000, 0.9487, -0.3162]",0.9487
+Top Camera,dmc_custom_walker_top,trackcom,torso,"[0.0000, 0.0000, 4.0000]","[0.0000, -1.0000, 0.0000]","[1.0000, 0.0000, 0.0000]","[-0.0000, 0.0000, 1.0000]","[0.0000, -0.0000, -1.0000]","[0.0000, 0.0000, -1.0000]",1.0000
