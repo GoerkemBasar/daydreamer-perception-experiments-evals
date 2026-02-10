@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate seminar analysis plots for DayDreamer side/top server runs."""
+"""Seminar analysis plots for DayDreamer side/top server runs."""
 
 from __future__ import annotations
 
@@ -15,6 +15,11 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 LOGDIR = ROOT / "logdir"
 OUTDIR = ROOT / "analysis" / "seminar_plots"
+HARDSHIFT_RUN = "run_gruenau_server_hardshift_side2top_01"
+TOP_BASELINE_RUN = "run_gruenau_server_top_01"
+HARDSHIFT_SHIFT_STEP = 1_000_000
+EPISODE_LENGTH = 10_000
+TOP_COMPARE_HORIZON = 500_000
 
 RUNS = {
     "Side Brain": "run_gruenau_server_side_01",
@@ -46,8 +51,20 @@ def read_jsonl(path: Path) -> List[dict]:
 
 
 def load_training_scores(run_name: str) -> Tuple[np.ndarray, np.ndarray]:
-    rows = read_jsonl(LOGDIR / run_name / "scores.jsonl")
+    scores_path = LOGDIR / run_name / "scores.jsonl"
+    rows = read_jsonl(scores_path)
     steps, scores = [], []
+    for row in rows:
+        if "episode/score" in row:
+            steps.append(float(row["step"]))
+            scores.append(float(row["episode/score"]))
+    if scores:
+        return np.array(steps), np.array(scores)
+
+    # Some runs had eval-only writes to scores.jsonl; recover training scores
+    # from metrics.jsonl in that case.
+    metrics_path = LOGDIR / run_name / "metrics.jsonl"
+    rows = read_jsonl(metrics_path)
     for row in rows:
         if "episode/score" in row:
             steps.append(float(row["step"]))
@@ -282,6 +299,155 @@ def build_transfer_summary(eval_returns: Dict[str, np.ndarray]) -> List[dict]:
     ]
 
 
+def load_last_replay_stats(run_name: str) -> Tuple[float, float]:
+    metrics_rows = read_jsonl(LOGDIR / run_name / "metrics.jsonl")
+    last = None
+    for row in metrics_rows:
+        if "replay/replay_steps" in row and "replay/replay_trajs" in row:
+            last = row
+    if last is None:
+        return np.nan, np.nan
+    return float(last["replay/replay_steps"]), float(last["replay/replay_trajs"])
+
+
+def hardshift_split(
+    steps: np.ndarray,
+    scores: np.ndarray,
+    shift_step: int = HARDSHIFT_SHIFT_STEP,
+    episode_length: int = EPISODE_LENGTH,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    pre_mask = steps <= (shift_step + episode_length)
+    post_mask = steps > (shift_step + episode_length)
+    return steps[pre_mask], scores[pre_mask], steps[post_mask], scores[post_mask]
+
+
+def plot_hardshift_timeline(
+    hard_steps: np.ndarray,
+    hard_scores: np.ndarray,
+    shift_step: int = HARDSHIFT_SHIFT_STEP,
+) -> None:
+    pre_steps, pre_scores, post_steps, post_scores = hardshift_split(hard_steps, hard_scores, shift_step)
+    plt.style.use("seaborn-v0_8-whitegrid")
+    fig, ax = plt.subplots(figsize=(12.5, 5.0))
+
+    ax.plot(hard_steps / 1e6, hard_scores, color="#777777", alpha=0.25, linewidth=1.2, label="Raw score")
+    ax.plot(pre_steps / 1e6, rolling_mean(pre_scores, window=8), color="#1f77b4", linewidth=2.6, label="Stage1 side (8-ep MA)")
+    ax.plot(post_steps / 1e6, rolling_mean(post_scores, window=8), color="#ff7f0e", linewidth=2.6, label="Stage2 top (8-ep MA)")
+    ax.axvline(shift_step / 1e6, color="black", linestyle="--", linewidth=1.4, label="Hard shift @1.0M")
+
+    ax.set_title("Hard Shift Timeline: Side -> Top in One Run")
+    ax.set_xlabel("Environment steps (millions)")
+    ax.set_ylabel("Episode return")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(OUTDIR / "hardshift_timeline.png", dpi=220)
+    plt.close(fig)
+
+
+def plot_hardshift_vs_top_500k(
+    hard_steps: np.ndarray,
+    hard_scores: np.ndarray,
+    top_steps: np.ndarray,
+    top_scores: np.ndarray,
+) -> None:
+    _, _, post_steps, post_scores = hardshift_split(hard_steps, hard_scores)
+    top_mask = top_steps <= TOP_COMPARE_HORIZON
+    top_steps = top_steps[top_mask]
+    top_scores = top_scores[top_mask]
+
+    hard_rel = post_steps - post_steps[0]
+    top_rel = top_steps - top_steps[0]
+
+    plt.style.use("seaborn-v0_8-whitegrid")
+    fig, ax = plt.subplots(figsize=(12.5, 5.0))
+    ax.plot(hard_rel / 1e6, post_scores, color="#ff7f0e", alpha=0.2, linewidth=1.2)
+    ax.plot(top_rel / 1e6, top_scores, color="#d62728", alpha=0.2, linewidth=1.2)
+    ax.plot(hard_rel / 1e6, rolling_mean(post_scores, window=8), color="#ff7f0e", linewidth=2.8, label="Hard-shift Stage2 (8-ep MA)")
+    ax.plot(top_rel / 1e6, rolling_mean(top_scores, window=8), color="#d62728", linewidth=2.8, label="Top-only baseline (8-ep MA)")
+    ax.set_title("Post-Shift Adaptation vs Top-Only Baseline (first 500k)")
+    ax.set_xlabel("Relative environment steps from segment start (millions)")
+    ax.set_ylabel("Episode return")
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    fig.savefig(OUTDIR / "hardshift_vs_top500k.png", dpi=220)
+    plt.close(fig)
+
+
+def plot_hardshift_summary_bars(summary_row: dict) -> None:
+    labels = [
+        "Pre-shift\nlast10 mean",
+        "Post-shift\nfirst10 mean",
+        "Post-shift\nlast10 mean",
+        "Top baseline\nlast10 <=500k",
+    ]
+    values = [
+        float(summary_row["pre_shift_last10_mean"]),
+        float(summary_row["post_shift_first10_mean"]),
+        float(summary_row["post_shift_last10_mean"]),
+        float(summary_row["top_baseline_last10_mean_500k"]),
+    ]
+    colors = ["#1f77b4", "#ffbb78", "#ff7f0e", "#d62728"]
+
+    plt.style.use("seaborn-v0_8-whitegrid")
+    fig, ax = plt.subplots(figsize=(9.4, 5.0))
+    bars = ax.bar(labels, values, color=colors, alpha=0.9)
+    ax.set_title("Hard Shift Summary: Collapse and Partial Recovery")
+    ax.set_ylabel("Episode return")
+    for bar, val in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2, val + 20, f"{val:.0f}", ha="center", va="bottom", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(OUTDIR / "hardshift_summary_bars.png", dpi=220)
+    plt.close(fig)
+
+
+def build_hardshift_summary(
+    hard_steps: np.ndarray,
+    hard_scores: np.ndarray,
+    top_steps: np.ndarray,
+    top_scores: np.ndarray,
+) -> List[dict]:
+    _, _, post_steps, post_scores = hardshift_split(hard_steps, hard_scores)
+    pre_steps, pre_scores, _, _ = hardshift_split(hard_steps, hard_scores)
+
+    top_mask = top_steps <= TOP_COMPARE_HORIZON
+    top_scores_500k = top_scores[top_mask]
+
+    pre_last10 = pre_scores[-10:]
+    post_first10 = post_scores[:10]
+    post_last10 = post_scores[-10:]
+    top_last10 = top_scores_500k[-10:]
+    replay_steps, replay_trajs = load_last_replay_stats(HARDSHIFT_RUN)
+    replay_capacity_eps = replay_trajs if np.isfinite(replay_trajs) else np.nan
+    top_fraction_end = (
+        min(1.0, len(post_scores) / replay_capacity_eps) if np.isfinite(replay_capacity_eps) and replay_capacity_eps > 0 else np.nan
+    )
+    old_fraction_end = (1.0 - top_fraction_end) if np.isfinite(top_fraction_end) else np.nan
+
+    row = {
+        "shift_step": HARDSHIFT_SHIFT_STEP,
+        "pre_shift_episodes": int(len(pre_scores)),
+        "post_shift_episodes": int(len(post_scores)),
+        "pre_shift_last10_mean": float(np.mean(pre_last10)),
+        "post_shift_first10_mean": float(np.mean(post_first10)),
+        "post_shift_last10_mean": float(np.mean(post_last10)),
+        "post_shift_mean_500k": float(np.mean(post_scores)),
+        "post_shift_best_500k": float(np.max(post_scores)),
+        "top_baseline_mean_500k": float(np.mean(top_scores_500k)),
+        "top_baseline_best_500k": float(np.max(top_scores_500k)),
+        "top_baseline_last10_mean_500k": float(np.mean(top_last10)),
+        "recovery_vs_pre_last10_pct": 100.0 * float(np.mean(post_last10)) / float(np.mean(pre_last10)),
+        "recovery_vs_top_last10_pct": 100.0 * float(np.mean(post_last10)) / float(np.mean(top_last10)),
+        "initial_drop_vs_pre_last10_pct": 100.0 * (1.0 - float(np.mean(post_first10)) / float(np.mean(pre_last10))),
+        "post_shift_start_step": float(post_steps[0]),
+        "post_shift_end_step": float(post_steps[-1]),
+        "replay_steps_end": replay_steps,
+        "replay_trajs_end": replay_trajs,
+        "estimated_top_data_fraction_end_pct": 100.0 * top_fraction_end if np.isfinite(top_fraction_end) else np.nan,
+        "estimated_old_side_data_fraction_end_pct": 100.0 * old_fraction_end if np.isfinite(old_fraction_end) else np.nan,
+    }
+    return [row]
+
+
 def main() -> None:
     OUTDIR.mkdir(parents=True, exist_ok=True)
 
@@ -293,13 +459,21 @@ def main() -> None:
     plot_transfer_heatmap(eval_returns)
     plot_relative_cross_drop(eval_returns)
 
+    hard_steps, hard_scores = load_training_scores(HARDSHIFT_RUN)
+    top_steps, top_scores = load_training_scores(TOP_BASELINE_RUN)
+    plot_hardshift_timeline(hard_steps, hard_scores)
+    plot_hardshift_vs_top_500k(hard_steps, hard_scores, top_steps, top_scores)
+
     training_summary = build_training_summary(training)
     eval_summary = build_eval_summary(eval_returns)
     transfer_summary = build_transfer_summary(eval_returns)
+    hardshift_summary = build_hardshift_summary(hard_steps, hard_scores, top_steps, top_scores)
+    plot_hardshift_summary_bars(hardshift_summary[0])
 
     write_csv(training_summary, OUTDIR / "training_summary.csv")
     write_csv(eval_summary, OUTDIR / "eval_summary.csv")
     write_csv(transfer_summary, OUTDIR / "transfer_summary.csv")
+    write_csv(hardshift_summary, OUTDIR / "hardshift_summary.csv")
 
     print(f"Wrote plots and tables to: {OUTDIR}")
     for row in transfer_summary:
@@ -307,8 +481,16 @@ def main() -> None:
             f"{row['brain']}: in={row['in_domain_mean']:.1f}, cross={row['cross_domain_mean']:.1f}, "
             f"retention={row['retention_ratio_pct']:.1f}%"
         )
+    hs = hardshift_summary[0]
+    print(
+        "Hard shift: pre-last10={:.1f}, post-first10={:.1f}, post-last10={:.1f}, top-last10@500k={:.1f}".format(
+            hs["pre_shift_last10_mean"],
+            hs["post_shift_first10_mean"],
+            hs["post_shift_last10_mean"],
+            hs["top_baseline_last10_mean_500k"],
+        )
+    )
 
 
 if __name__ == "__main__":
     main()
-

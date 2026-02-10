@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Generate slide-ready camera pose graphics from custom walker camera setup."""
-
 from __future__ import annotations
 
 import csv
